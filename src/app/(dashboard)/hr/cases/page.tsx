@@ -47,6 +47,10 @@ export default function HRCasesPage() {
     // Filter and sort
     const filtered = cases
         .filter((c) => {
+            if (filter === 'overdue') {
+                const isOverdue = c.status === 'investigating' && (!c.assigned_icc_ids || c.assigned_icc_ids.length === 0) && (Date.now() - new Date(c.created_at).getTime()) > 3 * 24 * 60 * 60 * 1000;
+                return isOverdue;
+            }
             if (filter !== 'all' && c.status !== filter) return false;
             if (typeFilter !== 'all' && c.type !== typeFilter) return false;
             if (search) {
@@ -77,9 +81,19 @@ export default function HRCasesPage() {
                 <Link href="/hr" className="btn-ghost text-sm">← Dashboard</Link>
             </div>
 
+            {/* Overdue Alert if any */}
+            {cases.some(c => c.status === 'investigating' && (!c.assigned_icc_ids || c.assigned_icc_ids.length === 0) && (Date.now() - new Date(c.created_at).getTime()) > 3 * 24 * 60 * 60 * 1000) && (
+                <div className="mb-4 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-center gap-3">
+                    <AlertTriangle size={18} className="text-amber-500" />
+                    <p className="text-xs text-amber-200">
+                        Some cases are missing ICC assignment beyond the 3-day deadline. Immediate action required.
+                    </p>
+                </div>
+            )}
+
             {/* Status Filter Tabs */}
             <div className="flex gap-2 mb-4 flex-wrap">
-                {(['all', 'pending', 'investigating', 'resolved'] as const).map((f) => (
+                {(['all', 'pending', 'investigating', 'overdue', 'resolved'] as const).map((f) => (
                     <button
                         key={f}
                         onClick={() => setFilter(f)}
@@ -90,7 +104,11 @@ export default function HRCasesPage() {
                             border: `1px solid ${filter === f ? '#e855a030' : 'rgba(255,255,255,0.08)'}`,
                         }}
                     >
-                        {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)} ({counts[f as keyof typeof counts] || 0})
+                        {f === 'all' ? 'All' : f === 'overdue' ? '⚠️ Overdue' : f.charAt(0).toUpperCase() + f.slice(1)} ({
+                            f === 'overdue'
+                                ? cases.filter(c => c.status === 'investigating' && (!c.assigned_icc_ids || c.assigned_icc_ids.length === 0) && (Date.now() - new Date(c.created_at).getTime()) > 3 * 24 * 60 * 60 * 1000).length
+                                : counts[f as keyof typeof counts] || 0
+                        })
                     </button>
                 ))}
             </div>
@@ -161,7 +179,7 @@ export default function HRCasesPage() {
                                     <p className="text-sm text-slate-300 line-clamp-1">{c.description}</p>
                                     <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
                                         <span>{TYPE_LABELS[c.type]}</span>
-                                        <span>📅 {c.date_of_incident}</span>
+                                        <span>📅 Registered: {new Date(c.created_at).toLocaleDateString()}</span>
                                         <span>📍 {c.location}</span>
                                         {c.is_anonymous && <span className="text-[#e855a0]">🔒 Anonymous</span>}
                                     </div>
@@ -174,12 +192,19 @@ export default function HRCasesPage() {
                                 </div>
 
                                 {/* Status */}
-                                <span
-                                    className="text-xs px-3 py-1 rounded-full font-medium flex-shrink-0 flex items-center gap-1"
-                                    style={{ background: status.bg, color: status.color }}
-                                >
-                                    {status.icon} {status.label}
-                                </span>
+                                <div className="flex flex-col items-end gap-1">
+                                    <span
+                                        className="text-xs px-3 py-1 rounded-full font-medium flex-shrink-0 flex items-center gap-1"
+                                        style={{ background: status.bg, color: status.color }}
+                                    >
+                                        {status.icon} {status.label}
+                                    </span>
+                                    {c.status === 'investigating' && (!c.assigned_icc_ids || c.assigned_icc_ids.length === 0) && (Date.now() - new Date(c.created_at).getTime()) > 3 * 24 * 60 * 60 * 1000 && (
+                                        <span className="text-[9px] font-bold text-amber-500 uppercase flex items-center gap-1">
+                                            <Clock size={10} /> 3d Deadline Exceeded
+                                        </span>
+                                    )}
+                                </div>
 
                                 {/* Arrow */}
                                 <span className="text-slate-500 group-hover:text-[#e855a0] transition-colors">→</span>

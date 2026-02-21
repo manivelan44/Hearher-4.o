@@ -33,7 +33,7 @@ export const MOCK_COMPLAINTS: Complaint[] = [
         location: 'Conference Room B, 3rd Floor',
         status: 'investigating',
         severity: 7,
-        assigned_icc_id: '44444444-4444-4444-4444-444444444444',
+        assigned_icc_ids: ['44444444-4444-4444-4444-444444444444'],
         ai_analysis: {
             sentiment: 'negative',
             severity_score: 7,
@@ -56,9 +56,9 @@ export const MOCK_COMPLAINTS: Complaint[] = [
         date_of_incident: '2026-02-14',
         time_of_incident: '22:15',
         location: 'Online — Internal Chat',
-        status: 'pending',
+        status: 'investigating',
         severity: 6,
-        assigned_icc_id: null,
+        assigned_icc_ids: [],
         ai_analysis: {
             sentiment: 'distressed',
             severity_score: 6,
@@ -83,7 +83,7 @@ export const MOCK_COMPLAINTS: Complaint[] = [
         location: "Manager's Office, 5th Floor",
         status: 'resolved',
         severity: 9,
-        assigned_icc_id: '44444444-4444-4444-4444-444444444444',
+        assigned_icc_ids: ['44444444-4444-4444-4444-444444444444'],
         ai_analysis: {
             sentiment: 'fearful',
             severity_score: 9,
@@ -106,9 +106,9 @@ export const MOCK_COMPLAINTS: Complaint[] = [
         date_of_incident: '2026-02-17',
         time_of_incident: '14:30',
         location: 'Open Office Area, 2nd Floor',
-        status: 'pending',
+        status: 'investigating',
         severity: 5,
-        assigned_icc_id: null,
+        assigned_icc_ids: [],
         ai_analysis: {
             sentiment: 'uncomfortable',
             severity_score: 5,

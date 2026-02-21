@@ -279,3 +279,36 @@ ALTER TABLE panic_alerts DISABLE ROW LEVEL SECURITY;
 ALTER TABLE guardian_sessions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE evidence_vault DISABLE ROW LEVEL SECURITY;
 ALTER TABLE chatbot_conversations DISABLE ROW LEVEL SECURITY;
+ALTER TABLE icc_members DISABLE ROW LEVEL SECURITY;
+ALTER TABLE organizations DISABLE ROW LEVEL SECURITY;
+ALTER TABLE accused_responses DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pulse_surveys DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pulse_responses DISABLE ROW LEVEL SECURITY;
+ALTER TABLE organization_ratings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE panic_responses DISABLE ROW LEVEL SECURITY;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Junction Table: ICC Committee Assignments (multiple members per complaint)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS complaint_icc_assignments (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    complaint_id    UUID REFERENCES complaints(id) ON DELETE CASCADE,
+    icc_user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+    assigned_at     TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(complaint_id, icc_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_complaint_icc_complaint ON complaint_icc_assignments(complaint_id);
+CREATE INDEX IF NOT EXISTS idx_complaint_icc_user ON complaint_icc_assignments(icc_user_id);
+
+ALTER TABLE complaint_icc_assignments DISABLE ROW LEVEL SECURITY;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- SEED DATA: ICC Members
+-- ═══════════════════════════════════════════════════════════════════════════
+
+INSERT INTO icc_members (org_id, user_id, role) VALUES
+    ('11111111-1111-1111-1111-111111111111', '44444444-4444-4444-4444-444444444444', 'presiding')
+ON CONFLICT (org_id, user_id) DO NOTHING;

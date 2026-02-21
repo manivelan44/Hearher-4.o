@@ -366,6 +366,29 @@ export default function PanicButtonPage() {
                             📹 Recording video & audio as evidence. This will be saved when you resolve the alert.
                         </p>
 
+                        {/* Live Location Map */}
+                        {location && (
+                            <div className="w-full rounded-xl overflow-hidden relative" style={{ border: '2px solid #ef444430' }}>
+                                <iframe
+                                    key={`map-${location.lat}-${location.lng}`}
+                                    width="100%"
+                                    height="200"
+                                    style={{ border: 0, filter: 'hue-rotate(180deg) invert(1) brightness(0.85) contrast(1.1)' }}
+                                    loading="eager"
+                                    src={`https://www.openstreetmap.org/export/embed.html?bbox=${location.lng - 0.004},${location.lat - 0.002},${location.lng + 0.004},${location.lat + 0.002}&layer=mapnik&marker=${location.lat},${location.lng}`}
+                                />
+                                <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: 'rgba(0,0,0,0.75)' }}>
+                                    <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                                    <span className="text-[10px] font-mono text-white">YOUR LIVE LOCATION</span>
+                                </div>
+                                <div className="absolute bottom-2 right-2 px-2 py-1 rounded-lg" style={{ background: 'rgba(0,0,0,0.75)' }}>
+                                    <span className="text-[10px] font-mono text-emerald-400">
+                                        📍 {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Status Card */}
                         <div className="glass-card p-4 w-full text-left space-y-2 text-sm">
                             <div className="flex justify-between"><span className="text-slate-500">Status:</span><span className="text-red-400 font-medium">🔴 Active</span></div>
@@ -373,7 +396,7 @@ export default function PanicButtonPage() {
                             <div className="flex justify-between">
                                 <span className="text-slate-500">📍 Live Location:</span>
                                 <span className="text-emerald-400 font-mono text-xs">
-                                    {location ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}` : 'Fetching...'}
+                                    {location ? `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}` : 'Fetching...'}
                                 </span>
                             </div>
                             <div className="flex justify-between">

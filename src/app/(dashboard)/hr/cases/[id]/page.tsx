@@ -70,20 +70,29 @@ export default function HRCaseDetailPage({ params }: { params: Promise<{ id: str
         setActionLoading(false);
     };
 
-    const handleAssignICC = async (iccUserId: string) => {
-        if (!complaint) return;
+    const [selectedIccIds, setSelectedIccIds] = useState<string[]>([]);
+
+    const toggleIccMember = (userId: string) => {
+        setSelectedIccIds((prev) =>
+            prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+        );
+    };
+
+    const handleAssignICCCommittee = async () => {
+        if (!complaint || selectedIccIds.length === 0) return;
         setActionLoading(true);
-        await assignICCToComplaint(complaint.id, iccUserId, user?.id);
-        setComplaint({ ...complaint, assigned_icc_id: iccUserId, status: 'investigating', updated_at: new Date().toISOString() });
+        await assignICCToComplaint(complaint.id, selectedIccIds, user?.id);
+        setComplaint({ ...complaint, assigned_icc_ids: [...selectedIccIds], status: 'investigating', updated_at: new Date().toISOString() });
         setTimeline((prev) => [...prev, {
             id: `t-${Date.now()}`,
             complaint_id: complaint.id,
             event: 'assigned',
-            details: `ICC member assigned to case by HR`,
+            details: `ICC committee of ${selectedIccIds.length} member(s) assigned to case by HR`,
             actor_id: user?.id || null,
             occurred_at: new Date().toISOString(),
         }]);
         setShowAssign(false);
+        setSelectedIccIds([]);
         setActionLoading(false);
     };
 
@@ -125,11 +134,27 @@ export default function HRCaseDetailPage({ params }: { params: Promise<{ id: str
                         </span>
                     </h1>
                     <p className="text-sm text-slate-400 mt-1">
-                        Filed {new Date(complaint.created_at).toLocaleDateString()} • Severity{' '}
+                        Registered {new Date(complaint.created_at).toLocaleDateString()} • Severity{' '}
                         <span className="font-bold" style={{ color: SEVERITY_COLOR(complaint.severity) }}>{complaint.severity}/10</span>
                     </p>
                 </div>
             </div>
+
+            {/* ⚠️ Overdue ICC Assignment Warning */}
+            {complaint.status === 'investigating' && (!complaint.assigned_icc_ids || complaint.assigned_icc_ids.length === 0) && (Date.now() - new Date(complaint.created_at).getTime()) > 3 * 24 * 60 * 60 * 1000 && (
+                <div className="mb-6 rounded-xl p-4 flex items-center gap-4 animate-pulse" style={{ background: 'linear-gradient(135deg, #f5a62315, #ef444410)', border: '1px solid #f5a62340' }}>
+                    <div className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: '#f5a62320' }}>
+                        <Clock size={24} className="text-amber-400" />
+                    </div>
+                    <div className="flex-1">
+                        <p className="text-sm font-bold text-amber-400">⚠️ ICC ASSIGNMENT OVERDUE — {Math.floor((Date.now() - new Date(complaint.created_at).getTime()) / (1000 * 60 * 60 * 24))} Days Since Registration</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                            POSH Act requires ICC committee assignment within 3 days. This case was registered on {new Date(complaint.created_at).toLocaleDateString()}.
+                            Please assign an ICC committee immediately using the panel on the right.
+                        </p>
+                    </div>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Left: Details + AI Analysis */}
@@ -209,39 +234,68 @@ export default function HRCaseDetailPage({ params }: { params: Promise<{ id: str
                         </h3>
 
                         {/* Assign ICC */}
-                        {!complaint.assigned_icc_id && (
+                        {(!complaint.assigned_icc_ids || complaint.assigned_icc_ids.length === 0) && (
                             <button
                                 onClick={() => setShowAssign(!showAssign)}
                                 disabled={actionLoading}
                                 className="w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 mb-3 transition-all hover:scale-[1.02]"
                                 style={{ background: '#a855f715', color: '#a855f7', border: '1px solid #a855f730' }}
                             >
-                                <UserPlus size={16} /> Assign ICC Member
+                                <UserPlus size={16} /> Assign ICC Committee
                             </button>
                         )}
 
-                        {/* ICC Assignment Dropdown */}
+                        {/* ICC Committee Multi-Select */}
                         {showAssign && (
                             <div className="space-y-2 mb-4 p-3 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                                <p className="text-xs text-slate-400 mb-2">Select ICC Member:</p>
-                                {iccMembers.map((m) => (
+                                <p className="text-xs text-slate-400 mb-2">Select ICC Committee Members (multi-select):</p>
+                                {iccMembers.map((m) => {
+                                    const isSelected = selectedIccIds.includes(m.user_id);
+                                    return (
+                                        <button
+                                            key={m.id}
+                                            onClick={() => toggleIccMember(m.user_id)}
+                                            disabled={actionLoading}
+                                            className="w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between"
+                                            style={{
+                                                background: isSelected ? '#a855f715' : 'transparent',
+                                                border: isSelected ? '1px solid #a855f740' : '1px solid transparent',
+                                            }}
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <div className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] ${isSelected ? 'bg-[#a855f7] border-[#a855f7] text-white' : 'border-slate-600'}`}>
+                                                    {isSelected && '✓'}
+                                                </div>
+                                                <span className="capitalize">{m.role} Member</span>
+                                            </div>
+                                            <span className="text-xs text-slate-500">{m.user_id.slice(0, 8)}</span>
+                                        </button>
+                                    );
+                                })}
+                                {selectedIccIds.length > 0 && (
                                     <button
-                                        key={m.id}
-                                        onClick={() => handleAssignICC(m.user_id)}
+                                        onClick={handleAssignICCCommittee}
                                         disabled={actionLoading}
-                                        className="w-full text-left p-2 rounded-lg text-sm hover:bg-white/5 transition-all flex items-center justify-between"
+                                        className="w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 mt-2 transition-all hover:scale-[1.02]"
+                                        style={{ background: '#10b98120', color: '#10b981', border: '1px solid #10b98130' }}
                                     >
-                                        <span className="capitalize">{m.role} Member</span>
-                                        <span className="text-xs text-slate-500">{m.user_id.slice(0, 8)}</span>
+                                        ✅ Confirm Committee ({selectedIccIds.length} member{selectedIccIds.length > 1 ? 's' : ''})
                                     </button>
-                                ))}
+                                )}
                             </div>
                         )}
 
-                        {complaint.assigned_icc_id && (
-                            <div className="p-3 rounded-xl mb-3" style={{ background: '#a855f710', border: '1px solid #a855f720' }}>
-                                <p className="text-xs text-slate-400">Assigned ICC</p>
-                                <p className="text-sm font-medium text-[#c084fc]">ICC #{complaint.assigned_icc_id.slice(0, 8)}</p>
+                        {(complaint.assigned_icc_ids?.length ?? 0) > 0 && (
+                            <div className="p-3 rounded-xl mb-3 space-y-2" style={{ background: '#a855f710', border: '1px solid #a855f720' }}>
+                                <p className="text-xs text-slate-400">ICC Committee Assigned ({complaint.assigned_icc_ids!.length} members)</p>
+                                {complaint.assigned_icc_ids!.map((uid, i) => (
+                                    <div key={uid} className="flex items-center gap-2">
+                                        <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px]" style={{ background: '#a855f720' }}>
+                                            {i + 1}
+                                        </div>
+                                        <p className="text-sm font-medium text-[#c084fc]">ICC #{uid.slice(0, 8)}</p>
+                                    </div>
+                                ))}
                             </div>
                         )}
 

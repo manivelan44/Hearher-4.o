@@ -41,8 +41,31 @@ function isSupabaseReady(): boolean {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// LocalStorage Persistence Helpers (for mock/demo mode)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function loadFromStorage<T>(key: string, fallback: T[]): T[] {
+    if (typeof window === 'undefined') return [...fallback];
+    try {
+        const saved = localStorage.getItem(key);
+        if (saved) return JSON.parse(saved) as T[];
+    } catch { /* ignore */ }
+    return [...fallback];
+}
+
+function saveToStorage<T>(key: string, data: T[]): void {
+    if (typeof window === 'undefined') return;
+    try {
+        localStorage.setItem(key, JSON.stringify(data));
+    } catch { /* ignore */ }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // COMPLAINTS
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Persisted mock complaints — survives page refresh
+const mockComplaints = loadFromStorage<Complaint>('posh_mock_complaints', MOCK_COMPLAINTS);
 
 /** Get all complaints, optionally filtered by org or complainant */
 export async function getComplaints(opts?: {
@@ -59,13 +82,34 @@ export async function getComplaints(opts?: {
 
             const { data, error } = await query;
             if (error) throw error;
+            if (data && data.length > 0) {
+                // Fetch all ICC assignments for these complaints
+                const complaintIds = data.map((c: any) => c.id as string);
+                const { data: iccRows } = await supabase
+                    .from('complaint_icc_assignments')
+                    .select('complaint_id, icc_user_id')
+                    .in('complaint_id', complaintIds);
+
+                // Group by complaint_id
+                const assignmentMap: Record<string, string[]> = {};
+                (iccRows || []).forEach((r: any) => {
+                    const cid = r.complaint_id as string;
+                    if (!assignmentMap[cid]) assignmentMap[cid] = [];
+                    assignmentMap[cid].push(r.icc_user_id as string);
+                });
+
+                return data.map((c: any) => ({
+                    ...(c as Complaint),
+                    assigned_icc_ids: assignmentMap[c.id] || [],
+                }));
+            }
             if (data) return data as Complaint[];
         } catch (e) {
             console.warn('[data-service] getComplaints fallback to mock:', e);
         }
     }
     // Fallback to mock
-    let result = [...MOCK_COMPLAINTS];
+    let result = [...mockComplaints];
     if (opts?.status && opts.status !== 'all') result = result.filter((c) => c.status === opts.status);
     return result;
 }
@@ -76,12 +120,20 @@ export async function getComplaintById(id: string): Promise<Complaint | null> {
         try {
             const { data, error } = await supabase.from('complaints').select('*').eq('id', id).single();
             if (error) throw error;
-            if (data) return data as Complaint;
+            if (data) {
+                // Fetch ICC committee assignments from junction table
+                const { data: iccRows } = await supabase
+                    .from('complaint_icc_assignments')
+                    .select('icc_user_id')
+                    .eq('complaint_id', id);
+                const iccIds = (iccRows || []).map((r: any) => r.icc_user_id as string);
+                return { ...(data as Complaint), assigned_icc_ids: iccIds };
+            }
         } catch (e) {
             console.warn('[data-service] getComplaintById fallback to mock:', e);
         }
     }
-    return MOCK_COMPLAINTS.find((c) => c.id === id) || null;
+    return mockComplaints.find((c) => c.id === id) || null;
 }
 
 /** Get timeline events for a complaint */
@@ -126,8 +178,8 @@ export async function createComplaint(input: {
                 .eq('org_id', input.orgId)
                 .order('role', { ascending: true }); // presiding first
 
-            if (iccMembers && iccMembers.length > 0) {
-                assignedIccId = iccMembers[0].user_id as string;
+            if (iccMembers && (iccMembers as any[]).length > 0) {
+                assignedIccId = (iccMembers as any[])[0].user_id as string;
             }
 
             // 2. Create complaint with auto-assignment
@@ -144,7 +196,7 @@ export async function createComplaint(input: {
                     time_of_incident: input.timeOfIncident,
                     location: input.location,
                     severity: input.severity,
-                    status: assignedIccId ? 'investigating' : 'pending',
+                    status: 'investigating', // HR must immediately start the investigation
                     assigned_icc_id: assignedIccId,
                 } as Record<string, unknown>)
                 .select('id')
@@ -152,22 +204,23 @@ export async function createComplaint(input: {
 
             if (error) throw error;
             if (data) {
+                const complaintId = (data as any).id;
                 // 3. Add timeline entries for the full auto-assignment flow
                 const timelineEntries = [
                     {
-                        complaint_id: data.id,
+                        complaint_id: complaintId,
                         event: 'created',
                         details: input.isAnonymous ? 'Anonymous complaint filed' : 'Complaint filed by employee',
                         actor_id: input.isAnonymous ? null : input.complainantId,
                     },
                     {
-                        complaint_id: data.id,
+                        complaint_id: complaintId,
                         event: 'ai_analyzed',
                         details: `AI assessed severity: ${input.severity}/10`,
                         actor_id: null,
                     },
                     {
-                        complaint_id: data.id,
+                        complaint_id: complaintId,
                         event: 'hr_notified',
                         details: 'HR team notified automatically',
                         actor_id: null,
@@ -176,7 +229,7 @@ export async function createComplaint(input: {
 
                 if (assignedIccId) {
                     timelineEntries.push({
-                        complaint_id: data.id,
+                        complaint_id: complaintId,
                         event: 'assigned',
                         details: 'Auto-assigned to ICC member for investigation',
                         actor_id: assignedIccId,
@@ -475,6 +528,9 @@ export async function getOrgRating(orgId: string): Promise<OrganizationRating> {
 // ICC MEMBERS
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Persisted mock ICC members — survives page refresh
+const mockIccMembers = loadFromStorage<ICCMember>('posh_mock_icc_members', MOCK_ICC_MEMBERS);
+
 export async function getICCMembers(orgId: string): Promise<ICCMember[]> {
     if (isSupabaseReady()) {
         try {
@@ -488,7 +544,89 @@ export async function getICCMembers(orgId: string): Promise<ICCMember[]> {
             console.warn('[data-service] getICCMembers fallback:', e);
         }
     }
-    return MOCK_ICC_MEMBERS;
+    return [...mockIccMembers];
+}
+
+/** Add a new ICC member — creates a user record first, then adds to ICC */
+export async function addICCMember(input: {
+    orgId: string;
+    name: string;
+    email: string;
+    role: 'presiding' | 'member' | 'external';
+}): Promise<ICCMember | null> {
+    if (isSupabaseReady()) {
+        try {
+            // 1. Create user record (icc_members.user_id references users.id)
+            const { data: userData, error: userError } = await supabase
+                .from('users')
+                .insert({
+                    org_id: input.orgId,
+                    email: input.email,
+                    name: input.name,
+                    role: 'icc',
+                    department: input.role === 'external' ? 'External (NGO/Legal)' : 'ICC Committee',
+                } as Record<string, unknown>)
+                .select('id')
+                .single();
+
+            if (userError) throw userError;
+            if (!userData) throw new Error('Failed to create user');
+
+            const newUserId = (userData as any).id as string;
+
+            // 2. Insert ICC member record
+            const { data: iccData, error: iccError } = await supabase
+                .from('icc_members')
+                .insert({
+                    org_id: input.orgId,
+                    user_id: newUserId,
+                    role: input.role,
+                } as Record<string, unknown>)
+                .select('*')
+                .single();
+
+            if (iccError) throw iccError;
+            if (iccData) return iccData as ICCMember;
+        } catch (e) {
+            console.warn('[data-service] addICCMember error:', e);
+        }
+    }
+    // Mock/localStorage fallback
+    const mockId = 'icc-m-' + Math.random().toString(36).substring(2, 8);
+    const mockUserId = input.name.trim().toLowerCase().replace(/\s+/g, '-') + '-' + Math.random().toString(36).substring(2, 6);
+    const newMember: ICCMember = {
+        id: mockId,
+        org_id: input.orgId,
+        user_id: mockUserId,
+        role: input.role,
+        appointed_at: new Date().toISOString(),
+    };
+    mockIccMembers.push(newMember);
+    saveToStorage('posh_mock_icc_members', mockIccMembers);
+    return newMember;
+}
+
+/** Delete an ICC member by ID */
+export async function deleteICCMember(memberId: string): Promise<boolean> {
+    if (isSupabaseReady()) {
+        try {
+            const { error } = await supabase
+                .from('icc_members')
+                .delete()
+                .eq('id', memberId);
+            if (error) throw error;
+            return true;
+        } catch (e) {
+            console.warn('[data-service] deleteICCMember error:', e);
+        }
+    }
+    // Mock/localStorage fallback
+    const idx = mockIccMembers.findIndex((m) => m.id === memberId);
+    if (idx !== -1) {
+        mockIccMembers.splice(idx, 1);
+        saveToStorage('posh_mock_icc_members', mockIccMembers);
+    }
+    return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -639,38 +777,75 @@ export async function updateComplaintStatus(
             console.warn('[data-service] updateComplaintStatus fallback:', e);
         }
     }
+    // Update mock data so changes persist
+    const idx = mockComplaints.findIndex((c) => c.id === complaintId);
+    if (idx !== -1) {
+        mockComplaints[idx] = { ...mockComplaints[idx], status: status as any, updated_at: new Date().toISOString() };
+        saveToStorage('posh_mock_complaints', mockComplaints);
+    }
     return true;
 }
 
-/** Assign an ICC member to a complaint */
+/** Assign ICC committee (multiple members) to a complaint */
 export async function assignICCToComplaint(
     complaintId: string,
-    iccUserId: string,
+    iccUserIds: string[],
     actorId?: string
 ): Promise<boolean> {
     if (isSupabaseReady()) {
         try {
-            const { error } = await supabase
+            // 1. Remove old assignments for this complaint
+            await supabase
+                .from('complaint_icc_assignments')
+                .delete()
+                .eq('complaint_id', complaintId);
+
+            // 2. Insert new assignments into junction table
+            if (iccUserIds.length > 0) {
+                const rows = iccUserIds.map((uid) => ({
+                    complaint_id: complaintId,
+                    icc_user_id: uid,
+                }));
+                const { error: insertError } = await supabase
+                    .from('complaint_icc_assignments')
+                    .insert(rows as Record<string, unknown>[]);
+                if (insertError) throw insertError;
+            }
+
+            // 3. Update complaint status + legacy assigned_icc_id (keep first member for backward compat)
+            const { error: updateError } = await supabase
                 .from('complaints')
                 .update({
-                    assigned_icc_id: iccUserId,
-                    status: 'investigating',
+                    assigned_icc_id: iccUserIds.length > 0 ? iccUserIds[0] : null,
+                    status: iccUserIds.length > 0 ? 'investigating' : 'pending',
                     updated_at: new Date().toISOString(),
                 } as Record<string, unknown>)
                 .eq('id', complaintId);
-            if (error) throw error;
+            if (updateError) throw updateError;
 
+            // 4. Add timeline event
             await supabase.from('complaint_timeline').insert({
                 complaint_id: complaintId,
                 event: 'assigned',
-                details: 'ICC member assigned to case',
+                details: `ICC committee of ${iccUserIds.length} member(s) assigned to case`,
                 actor_id: actorId || null,
             } as Record<string, unknown>);
 
             return true;
         } catch (e) {
-            console.warn('[data-service] assignICCToComplaint fallback:', e);
+            console.warn('[data-service] assignICCToComplaint error:', e);
         }
+    }
+    // Update mock data so changes persist across pages
+    const idx = mockComplaints.findIndex((c) => c.id === complaintId);
+    if (idx !== -1) {
+        mockComplaints[idx] = {
+            ...mockComplaints[idx],
+            assigned_icc_ids: [...iccUserIds],
+            status: iccUserIds.length > 0 ? 'investigating' : mockComplaints[idx].status,
+            updated_at: new Date().toISOString(),
+        };
+        saveToStorage('posh_mock_complaints', mockComplaints);
     }
     return true;
 }

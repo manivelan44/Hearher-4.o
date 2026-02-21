@@ -46,7 +46,7 @@ export interface Complaint {
     location: string | null;
     status: ComplaintStatus;
     severity: number;
-    assigned_icc_id: string | null;
+    assigned_icc_ids: string[];
     ai_analysis: {
         sentiment: string;
         severity_score: number;

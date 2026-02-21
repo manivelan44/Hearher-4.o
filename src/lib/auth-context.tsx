@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { supabase } from './supabase';
 import type { User, UserRole } from './database.types';
 
 // ─── Auth Context Types ─────────────────────────────────────────────────────
@@ -8,15 +9,17 @@ import type { User, UserRole } from './database.types';
 interface AuthContextType {
     user: User | null;
     loading: boolean;
-    signIn: (email: string, password: string) => Promise<void>;
-    signInAsRole: (role: UserRole) => void;
+    signIn: (email: string, password: string) => Promise<string | null>;
+    signUp: (email: string, password: string, name: string, role: UserRole) => Promise<string | null>;
     signOut: () => void;
-    switchRole: (role: UserRole) => void; // Demo: switch role without re-login
+    switchRole: (role: UserRole) => void;
+    signInAsRole: (role: UserRole) => void;
+    resendVerification: (email: string) => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// ─── Demo Users (for working without Supabase) ──────────────────────────────
+// ─── Demo Users (fallback when Supabase Auth is not configured) ─────────────
 const DEMO_USERS: Record<UserRole, User> = {
     employee: {
         id: '22222222-2222-2222-2222-222222222222',
@@ -71,35 +74,129 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [loading, setLoading] = useState(true);
 
-    // Check for saved session on mount
+    // Check for existing Supabase session on mount
     useEffect(() => {
-        const savedRole = localStorage.getItem('posh_demo_role') as UserRole | null;
-        if (savedRole && DEMO_USERS[savedRole]) {
-            setUser(DEMO_USERS[savedRole]);
-        }
-        setLoading(false);
+        const checkSession = async () => {
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+                if (session?.user) {
+                    // Fetch user profile from our users table
+                    const { data: profile } = await supabase
+                        .from('users')
+                        .select('*')
+                        .eq('email', session.user.email || '')
+                        .single();
+                    if (profile) {
+                        setUser(profile as User);
+                        setLoading(false);
+                        return;
+                    }
+                }
+            } catch {
+                // Supabase Auth not available, fall through to demo check
+            }
+            // Fallback: check for demo session
+            const savedRole = localStorage.getItem('posh_demo_role') as UserRole | null;
+            if (savedRole && DEMO_USERS[savedRole]) {
+                setUser(DEMO_USERS[savedRole]);
+            }
+            setLoading(false);
+        };
+        checkSession();
+
+        // Listen for Supabase auth state changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+            if (session?.user?.email) {
+                const { data: profile } = await supabase
+                    .from('users')
+                    .select('*')
+                    .eq('email', session.user.email)
+                    .single();
+                if (profile) {
+                    setUser(profile as User);
+                    localStorage.removeItem('posh_demo_role');
+                    return;
+                }
+            }
+            // If signed out and no demo role, clear user
+            if (!session && !localStorage.getItem('posh_demo_role')) {
+                setUser(null);
+            }
+        });
+
+        return () => { subscription.unsubscribe(); };
     }, []);
 
-    const signIn = useCallback(async (email: string, _password: string) => {
+    /** Sign in with email + password via Supabase Auth — rejects unverified emails */
+    const signIn = useCallback(async (email: string, password: string): Promise<string | null> => {
         setLoading(true);
-        // Demo mode: match email to a demo user
-        const matchedUser = Object.values(DEMO_USERS).find((u) => u.email === email);
-        if (matchedUser) {
-            setUser(matchedUser);
-            localStorage.setItem('posh_demo_role', matchedUser.role);
-        } else {
-            // Default to employee
-            setUser(DEMO_USERS.employee);
-            localStorage.setItem('posh_demo_role', 'employee');
+        try {
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) {
+                setLoading(false);
+                // Supabase returns "Email not confirmed" for unverified accounts
+                if (error.message.toLowerCase().includes('email not confirmed')) {
+                    return 'Your email is not verified yet. Please check your inbox and click the verification link before signing in.';
+                }
+                return error.message;
+            }
+
+            // Double-check: ensure email is confirmed
+            if (data?.user && !data.user.email_confirmed_at) {
+                await supabase.auth.signOut();
+                setLoading(false);
+                return 'Your email is not verified yet. Please check your inbox (and spam folder) and click the verification link.';
+            }
+
+            // Profile will be set by onAuthStateChange listener above
+            setLoading(false);
+            return null;
+        } catch (e: any) {
+            setLoading(false);
+            return e.message || 'Sign in failed';
         }
-        setLoading(false);
     }, []);
 
-    const signOut = useCallback(() => {
+    /** Sign up with email + password, then create a profile in the users table */
+    const signUp = useCallback(async (email: string, password: string, name: string, role: UserRole): Promise<string | null> => {
+        setLoading(true);
+        try {
+            const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+            if (authError) {
+                setLoading(false);
+                return authError.message;
+            }
+
+            // Create user profile in users table
+            if (authData.user) {
+                const { error: profileError } = await supabase.from('users').insert({
+                    id: authData.user.id,
+                    org_id: '11111111-1111-1111-1111-111111111111', // default org
+                    email,
+                    name,
+                    role,
+                    department: role === 'hr' ? 'Human Resources' : role === 'security' ? 'Security' : role === 'icc' ? 'Legal' : 'General',
+                } as Record<string, unknown>);
+                if (profileError) {
+                    console.warn('Profile creation warning:', profileError);
+                }
+            }
+
+            setLoading(false);
+            return null;
+        } catch (e: any) {
+            setLoading(false);
+            return e.message || 'Sign up failed';
+        }
+    }, []);
+
+    const signOut = useCallback(async () => {
+        await supabase.auth.signOut();
         setUser(null);
         localStorage.removeItem('posh_demo_role');
     }, []);
 
+    // Demo mode: switch role (kept for backward compat)
     const switchRole = useCallback((role: UserRole) => {
         setUser(DEMO_USERS[role]);
         localStorage.setItem('posh_demo_role', role);
@@ -110,8 +207,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem('posh_demo_role', role);
     }, []);
 
+    /** Resend email verification link */
+    const resendVerification = useCallback(async (email: string): Promise<string | null> => {
+        try {
+            const { error } = await supabase.auth.resend({ type: 'signup', email });
+            if (error) return error.message;
+            return null;
+        } catch (e: any) {
+            return e.message || 'Failed to resend verification email';
+        }
+    }, []);
+
     return (
-        <AuthContext.Provider value={{ user, loading, signIn, signInAsRole, signOut, switchRole }}>
+        <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut, switchRole, signInAsRole, resendVerification }}>
             {children}
         </AuthContext.Provider>
     );

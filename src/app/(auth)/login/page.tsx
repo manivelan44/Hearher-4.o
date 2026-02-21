@@ -165,10 +165,13 @@ export default function LoginPage() {
     const isVerificationError = error?.toLowerCase().includes('not verified') || error?.toLowerCase().includes('not confirmed') || error?.toLowerCase().includes('verification');
 
     // If already logged in, redirect based on role
-    if (user) {
-        router.push(ROLE_REDIRECTS[user.role]);
-        return null;
-    }
+    useEffect(() => {
+        if (user) {
+            router.push(ROLE_REDIRECTS[user.role]);
+        }
+    }, [user, router]);
+
+    if (user) return null; // Prevent rendering login form while redirecting
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();

@@ -58,7 +58,6 @@ const NAV_CONFIG: Record<UserRole, NavSection[]> = {
             items: [
                 { label: 'Panic Button', href: '/employee/panic', icon: <AlertTriangle size={ICON_SIZE} /> },
                 { label: 'Guardian Mode', href: '/employee/guardian', icon: <Shield size={ICON_SIZE} /> },
-                { label: 'Evidence Vault', href: '/employee/evidence-vault', icon: <Archive size={ICON_SIZE} /> },
             ],
         },
         {

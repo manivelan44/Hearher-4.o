@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/lib/auth-context';
-import { createPanicAlert, resolvePanicAlert, updatePanicLocation } from '@/lib/data-service';
+import { createPanicAlert, resolvePanicAlert, updatePanicLocation, uploadPanicRecording } from '@/lib/data-service';
 import { Video, Mic, Download, StopCircle } from 'lucide-react';
 
 // ─── States ─────────────────────────────────────────────────────────────────
@@ -221,13 +221,50 @@ export default function PanicButtonPage() {
     const resolve = async () => {
         // Stop recording — this triggers onstop which sets recordedBlob
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            // Override onstop to auto-download
+            // Override onstop to auto-download and email to HR
             mediaRecorderRef.current.onstop = () => {
                 const mimeType = mediaRecorderRef.current?.mimeType || 'video/webm';
                 const blob = new Blob(chunksRef.current, { type: mimeType });
                 setRecordedBlob(blob);
+
                 // Auto-download immediately
                 autoDownloadEvidence(blob);
+
+                // Upload to Supabase Storage and Evidence Vault
+                if (alertIdRef.current && user) {
+                    uploadPanicRecording(alertIdRef.current, user.id, blob).catch((err: any) => {
+                        console.error('Failed to upload panic recording', err);
+                    });
+                }
+
+                // Immediately Email the recording to HR
+                const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+                const fileName = `SOS-Evidence-${user?.name?.replace(/\s+/g, '-') || 'Employee'}-${new Date().getTime()}.${ext}`;
+                const file = new File([blob], fileName, { type: mimeType });
+
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('name', user?.name || 'Unknown Employee');
+                formData.append('email', user?.email || 'unknown@example.com');
+
+                // Get the latest known location if available
+                const loc = location || { lat: 12.9716, lng: 77.5946 };
+                formData.append('latitude', loc.lat.toString());
+                formData.append('longitude', loc.lng.toString());
+
+                // Send email API request in background
+                fetch('/api/send-panic-email', {
+                    method: 'POST',
+                    body: formData,
+                })
+                    .then(res => res.json())
+                    .then(data => {
+                        console.log('[PANIC] 📧 HR Email API Response:', data);
+                        if (data.previewUrl) {
+                            console.log(`[PANIC] 📬 Preview the test email here: ${data.previewUrl}`);
+                        }
+                    })
+                    .catch(err => console.error('[PANIC] ❌ Failed to send HR email:', err));
             };
             mediaRecorderRef.current.stop();
         }

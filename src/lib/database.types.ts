@@ -116,6 +116,7 @@ export interface PanicAlert {
     status: AlertStatus;
     source: AlertSource;
     message: string | null;
+    recording_url: string | null;
     created_at: string;
     resolved_at: string | null;
 }

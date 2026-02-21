@@ -33,4 +33,15 @@ export function createSupabaseServerClient(cookieStore: {
 }
 
 // ─── Direct Admin Client (for demo/seeding — NOT for production) ─────────────
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+// Disable the Navigator LockManager to prevent timeout errors across multiple tabs
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        // Bypass LockManager — prevents contention across employee + HR tabs
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        lock: (async (_name: string, _acquireTimeout: number, cb: () => Promise<any>) => {
+            return await cb();
+        }) as any,
+    },
+});

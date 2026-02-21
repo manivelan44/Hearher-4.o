@@ -226,16 +226,68 @@ export default function GuardianModePage() {
                     </motion.div>
                 )}
 
-                {/* ── EXPIRED ───────────────────────────────────────────────── */}
+                {/* ── EXPIRED (SOS TRIGGERED) ───────────────────────────────── */}
                 {state === 'expired' && (
-                    <motion.div key="expired" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-6 py-8">
-                        <div className="text-5xl animate-pulse">🚨</div>
-                        <h2 className="text-xl font-bold text-red-400">SOS Sent!</h2>
-                        <p className="text-sm text-slate-400 text-center max-w-sm">
-                            Your trusted contacts and security have been alerted. Stay where you are if possible.
-                        </p>
-                        <button onClick={endSession} className="btn-primary text-sm" style={{ background: '#10b981' }}>
-                            I&apos;m safe now — Resolve
+                    <motion.div key="expired" initial={{ opacity: 0 }} y={{ y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-6 py-8">
+                        <div className="w-20 h-20 rounded-full flex items-center justify-center animate-pulse" style={{ background: '#ef444420' }}>
+                            <div className="text-5xl">🚨</div>
+                        </div>
+                        <div className="text-center">
+                            <h2 className="text-2xl font-bold text-red-400 mb-2">SOS Auto-Triggered!</h2>
+                            <p className="text-sm text-slate-400 max-w-sm">
+                                HR and Security have been notified of your last known location.
+                            </p>
+                        </div>
+
+                        {/* Location Sharing to Contacts */}
+                        <div className="w-full glass-card border-red-500/30 bg-red-500/5 mt-2">
+                            <h3 className="text-sm font-bold text-red-400 flex items-center gap-2 mb-3">
+                                <AlertTriangle size={16} /> Alert Your Contacts Now
+                            </h3>
+                            <p className="text-xs text-slate-300 mb-4">
+                                Click below to instantly send your live GPS location to your trusted contacts via WhatsApp or SMS.
+                            </p>
+
+                            <div className="space-y-3">
+                                {contacts.map((c, i) => {
+                                    // Strip non-numeric characters for the tel/wa links
+                                    const cleanPhone = c.phone.replace(/\D/g, '');
+                                    const mapsLink = `https://www.google.com/maps?q=12.9716,77.5946`;
+                                    const message = encodeURIComponent(`🚨 URGENT: I missed my Guardian check-in on HearHer. Please check my live location immediately: ${mapsLink}`);
+
+                                    return (
+                                        <div key={i} className="flex flex-col sm:flex-row gap-2">
+                                            <div className="flex-1 p-3 rounded-lg flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                                <div>
+                                                    <p className="text-sm font-medium">{c.name}</p>
+                                                    <p className="text-xs text-slate-400">{c.phone}</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <a
+                                                    href={`https://wa.me/${cleanPhone}?text=${message}`}
+                                                    target="_blank" rel="noopener noreferrer"
+                                                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 rounded-lg text-xs font-bold transition-all hover:brightness-110"
+                                                    style={{ background: '#25D366', color: '#fff' }}
+                                                >
+                                                    WhatsApp
+                                                </a>
+                                                <a
+                                                    href={`sms:${cleanPhone}?body=${message}`}
+                                                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 rounded-lg text-xs font-bold transition-all hover:brightness-110"
+                                                    style={{ background: '#3b82f6', color: '#fff' }}
+                                                >
+                                                    SMS
+                                                </a>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <button onClick={endSession} className="w-full py-4 mt-4 rounded-xl text-sm font-bold transition-all" style={{ background: '#10b98120', color: '#10b981', border: '1px solid #10b98140' }}>
+                            I&apos;m safe now — End SOS & Resolve
                         </button>
                     </motion.div>
                 )}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { getDashboardStats, getPanicAlerts, getComplaints, type DashboardStats } from '@/lib/data-service';
 import type { PanicAlert, Complaint } from '@/lib/database.types';
@@ -46,13 +46,63 @@ export default function HRDashboard() {
         });
     }, [user]);
 
+    // To detect *new* alerts and ring the alarm
+    const previousAlertIds = useRef<Set<string>>(new Set());
+
     // Poll for active panic alerts every 10 seconds
     useEffect(() => {
         const fetchAlerts = () => {
             getPanicAlerts(user?.org_id).then((data) => {
-                setActiveAlerts(data.filter((a) => a.status === 'active'));
+                const active = data.filter((a) => a.status === 'active');
+                setActiveAlerts(active);
+
+                // Check for *new* alerts to trigger alarm
+                const currentIds = new Set(active.map(a => a.id));
+                let newAlertDetected = false;
+
+                for (const id of currentIds) {
+                    if (!previousAlertIds.current.has(id)) {
+                        newAlertDetected = true;
+
+                        // Show browser notification
+                        if (Notification.permission === 'granted') {
+                            const alertData = active.find(a => a.id === id);
+                            const loc = alertData ? `${alertData.latitude.toFixed(4)}, ${alertData.longitude.toFixed(4)}` : 'Unknown';
+                            new Notification('🚨 URGENT: SOS PANIC ALERT TRIGGERED 🚨', {
+                                body: `An employee has triggered a panic alert at location: ${loc}. Check the dashboard immediately!`,
+                                icon: '/favicon.ico',
+                                requireInteraction: true,
+                            });
+                        }
+                    }
+                }
+
+                // Play loud alarm sound if new alert detected
+                if (newAlertDetected) {
+                    try {
+                        // Using a harsh, urgent repeating beep for the alarm
+                        const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+                        audio.volume = 1.0;
+                        audio.play().catch(e => console.warn('Audio auto-play blocked by browser:', e));
+
+                        // Play it a few times for urgency
+                        setTimeout(() => audio.play().catch(() => { }), 1000);
+                        setTimeout(() => audio.play().catch(() => { }), 2000);
+                        setTimeout(() => audio.play().catch(() => { }), 3000);
+                    } catch (e) {
+                        console.warn('Could not play alarm sound:', e);
+                    }
+                }
+
+                previousAlertIds.current = currentIds;
             });
         };
+
+        // Request notification permission on mount
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+
         fetchAlerts();
         const interval = setInterval(fetchAlerts, 10000);
         return () => clearInterval(interval);
@@ -136,6 +186,43 @@ export default function HRDashboard() {
                                         <div className="w-2 h-2 rounded-full bg-red-500" />
                                         <span className="text-[10px] font-bold text-red-400 uppercase">Live</span>
                                     </div>
+                                </div>
+
+                                {/* 🎥 Recording Section — shows recording link when available */}
+                                <div className="mx-4 mb-3 rounded-xl p-3 flex items-center justify-between" style={{ background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.2)' }}>
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: '#a855f720' }}>
+                                            {alert.recording_url ? (
+                                                <FileText size={18} className="text-[#a855f7]" />
+                                            ) : (
+                                                <Activity size={18} className="text-[#a855f7] animate-pulse" />
+                                            )}
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-semibold" style={{ color: '#c084fc' }}>
+                                                {alert.recording_url ? '🎥 Audio/Video Recording Available' : '🎥 Recording in progress...'}
+                                            </p>
+                                            <p className="text-[10px] text-slate-500 mt-0.5">
+                                                {alert.recording_url ? 'Click to view the captured evidence' : 'Will be available when alert is resolved'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    {alert.recording_url ? (
+                                        <a
+                                            href={alert.recording_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.03]"
+                                            style={{ background: '#a855f720', color: '#c084fc', border: '1px solid #a855f730' }}
+                                        >
+                                            ▶ Play Recording
+                                        </a>
+                                    ) : (
+                                        <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-medium" style={{ background: '#ef444415', color: '#f87171' }}>
+                                            <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                            REC
+                                        </span>
+                                    )}
                                 </div>
 
                                 {/* Live Map Embed */}

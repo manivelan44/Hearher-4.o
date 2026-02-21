@@ -148,6 +148,7 @@ export default function ComplaintWizard() {
                 timeOfIncident: form.time,
                 location: form.location,
                 severity: aiFeedback?.severity_score ?? 5,
+                evidenceFiles: evidenceFiles.length > 0 ? evidenceFiles : undefined,
             });
         } catch (e) {
             console.error('Failed to submit complaint:', e);

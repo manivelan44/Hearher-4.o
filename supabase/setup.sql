@@ -312,3 +312,22 @@ ALTER TABLE complaint_icc_assignments DISABLE ROW LEVEL SECURITY;
 INSERT INTO icc_members (org_id, user_id, role) VALUES
     ('11111111-1111-1111-1111-111111111111', '44444444-4444-4444-4444-444444444444', 'presiding')
 ON CONFLICT (org_id, user_id) DO NOTHING;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- STORAGE BUCKETS (for Evidence & Panic Recordings)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+INSERT INTO storage.buckets (id, name, public) 
+VALUES ('evidence', 'evidence', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+CREATE POLICY "Users can upload evidence" ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'evidence');
+CREATE POLICY "Users can view evidence" ON storage.objects FOR SELECT TO authenticated USING (bucket_id = 'evidence');
+CREATE POLICY "Users can update evidence" ON storage.objects FOR UPDATE TO authenticated USING (bucket_id = 'evidence');
+CREATE POLICY "Users can delete evidence" ON storage.objects FOR DELETE TO authenticated USING (bucket_id = 'evidence');
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Add recording_url to panic_alerts (for sharing recordings with HR/Security)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS recording_url TEXT;

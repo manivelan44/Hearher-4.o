@@ -165,6 +165,7 @@ export async function createComplaint(input: {
     timeOfIncident: string;
     location: string;
     severity: number;
+    evidenceFiles?: File[];
 }): Promise<{ id: string; caseId: string } | null> {
     const newCaseId = caseId();
 
@@ -205,7 +206,42 @@ export async function createComplaint(input: {
             if (error) throw error;
             if (data) {
                 const complaintId = (data as any).id;
-                // 3. Add timeline entries for the full auto-assignment flow
+
+                // 3. Upload evidence files and link to complaint
+                if (input.evidenceFiles && input.evidenceFiles.length > 0) {
+                    for (const file of input.evidenceFiles) {
+                        try {
+                            const fileExt = file.name.split('.').pop() || 'bin';
+                            const fileName = `${newCaseId}_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+                            const filePath = `${input.orgId}/${complaintId}/${fileName}`;
+
+                            // Upload to Supabase Storage
+                            const { error: uploadError } = await supabase.storage
+                                .from('evidence')
+                                .upload(filePath, file);
+
+                            if (!uploadError) {
+                                const { data: publicData } = supabase.storage
+                                    .from('evidence')
+                                    .getPublicUrl(filePath);
+
+                                // Save to complaint_evidence table
+                                await supabase.from('complaint_evidence').insert({
+                                    complaint_id: complaintId,
+                                    file_url: publicData.publicUrl || filePath,
+                                    file_type: file.type || 'document',
+                                    file_name: file.name
+                                });
+                            } else {
+                                console.error('Evidence upload failed:', uploadError);
+                            }
+                        } catch (e) {
+                            console.error('Evidence upload exception:', e);
+                        }
+                    }
+                }
+
+                // 4. Add timeline entries for the full auto-assignment flow
                 const timelineEntries = [
                     {
                         complaint_id: complaintId,
@@ -257,6 +293,23 @@ export async function createComplaint(input: {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Create a panic alert */
+// ─── localStorage helpers for panic alerts (cross-tab sync) ─────────────────
+
+const PANIC_STORAGE_KEY = 'posh_panic_alerts';
+
+function getLocalPanicAlerts(): PanicAlert[] {
+    if (typeof window === 'undefined') return [];
+    try {
+        const raw = localStorage.getItem(PANIC_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+}
+
+function saveLocalPanicAlerts(alerts: PanicAlert[]): void {
+    if (typeof window === 'undefined') return;
+    try { localStorage.setItem(PANIC_STORAGE_KEY, JSON.stringify(alerts)); } catch { }
+}
+
 export async function createPanicAlert(input: {
     userId: string;
     orgId: string;
@@ -265,6 +318,8 @@ export async function createPanicAlert(input: {
     source: 'panic' | 'guardian' | 'shake';
     message?: string;
 }): Promise<string | null> {
+    let supabaseId: string | null = null;
+
     if (isSupabaseReady()) {
         try {
             const { data, error } = await supabase
@@ -281,27 +336,61 @@ export async function createPanicAlert(input: {
                 .select('id')
                 .single();
 
-            if (error) throw error;
-            return data?.id || null;
-        } catch (e) {
-            console.warn('[data-service] createPanicAlert fallback to mock:', e);
+            if (error) {
+                console.error('[PANIC] Failed to create panic alert in Supabase:', error.message);
+            } else {
+                supabaseId = data?.id || null;
+                console.log('[PANIC] ✅ Alert created in Supabase:', supabaseId);
+            }
+        } catch (e: any) {
+            console.error('[PANIC] Exception creating alert:', e?.message || e);
         }
     }
-    return 'pa-mock-' + Date.now();
+
+    // Always save to localStorage for cross-tab sync (HR dashboard reads this)
+    const alertId = supabaseId || 'pa-local-' + Date.now();
+    const newAlert: PanicAlert = {
+        id: alertId,
+        user_id: input.userId,
+        org_id: input.orgId,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        status: 'active',
+        source: input.source,
+        message: input.message || null,
+        recording_url: null,
+        created_at: new Date().toISOString(),
+        resolved_at: null,
+    };
+    const existing = getLocalPanicAlerts();
+    existing.unshift(newAlert);
+    saveLocalPanicAlerts(existing);
+    console.log('[PANIC] ✅ Alert saved to localStorage for HR dashboard:', alertId);
+
+    return alertId;
 }
 
 /** Resolve a panic alert */
 export async function resolvePanicAlert(alertId: string): Promise<boolean> {
-    if (isSupabaseReady()) {
+    // Update localStorage first (instant for HR dashboard)
+    const alerts = getLocalPanicAlerts();
+    const idx = alerts.findIndex((a) => a.id === alertId);
+    if (idx !== -1) {
+        alerts[idx].status = 'resolved';
+        alerts[idx].resolved_at = new Date().toISOString();
+        saveLocalPanicAlerts(alerts);
+        console.log('[PANIC] ✅ Alert resolved in localStorage:', alertId);
+    }
+
+    if (isSupabaseReady() && !alertId.startsWith('pa-local-')) {
         try {
             const { error } = await supabase
                 .from('panic_alerts')
                 .update({ status: 'resolved', resolved_at: new Date().toISOString() } as Record<string, unknown>)
                 .eq('id', alertId);
-            if (error) throw error;
-            return true;
-        } catch (e) {
-            console.warn('[data-service] resolvePanicAlert fallback:', e);
+            if (error) console.error('[PANIC] Supabase resolve error:', error.message);
+        } catch (e: any) {
+            console.error('[PANIC] Exception resolving alert:', e?.message || e);
         }
     }
     return true;
@@ -309,35 +398,70 @@ export async function resolvePanicAlert(alertId: string): Promise<boolean> {
 
 /** Update live location for an active panic alert */
 export async function updatePanicLocation(alertId: string, latitude: number, longitude: number): Promise<boolean> {
-    if (isSupabaseReady()) {
+    // Update in localStorage first for instant HR dashboard sync
+    const alerts = getLocalPanicAlerts();
+    const idx = alerts.findIndex((a) => a.id === alertId);
+    if (idx !== -1) {
+        alerts[idx].latitude = latitude;
+        alerts[idx].longitude = longitude;
+        saveLocalPanicAlerts(alerts);
+    }
+
+    if (isSupabaseReady() && !alertId.startsWith('pa-local-')) {
         try {
             const { error } = await supabase
                 .from('panic_alerts')
                 .update({ latitude, longitude } as Record<string, unknown>)
                 .eq('id', alertId);
-            if (error) throw error;
-            return true;
-        } catch (e) {
-            console.warn('[data-service] updatePanicLocation error:', e);
+            if (error) console.error('[PANIC] Supabase location update error:', error.message);
+            else return true;
+        } catch (e: any) {
+            console.error('[PANIC] Exception updating location:', e?.message || e);
         }
     }
-    return false;
+    return idx !== -1;
 }
 
-/** Get active panic alerts for an org */
+/** Get panic alerts — merges Supabase + localStorage for reliability */
 export async function getPanicAlerts(orgId?: string): Promise<PanicAlert[]> {
+    let supabaseAlerts: PanicAlert[] = [];
+
     if (isSupabaseReady()) {
         try {
             let query = supabase.from('panic_alerts').select('*').order('created_at', { ascending: false });
             if (orgId) query = query.eq('org_id', orgId);
             const { data, error } = await query;
-            if (error) throw error;
-            if (data) return data as PanicAlert[];
-        } catch (e) {
-            console.warn('[data-service] getPanicAlerts fallback:', e);
+            if (error) {
+                console.error('[PANIC] Supabase getPanicAlerts error:', error.message);
+            } else if (data) {
+                supabaseAlerts = data as PanicAlert[];
+            }
+        } catch (e: any) {
+            console.error('[PANIC] Exception fetching alerts:', e?.message || e);
         }
     }
-    return MOCK_PANIC_ALERTS;
+
+    // Merge with localStorage alerts (deduplicate by id)
+    const localAlerts = getLocalPanicAlerts().filter(
+        (la) => orgId ? la.org_id === orgId : true
+    );
+    const seenIds = new Set(supabaseAlerts.map((a) => a.id));
+    const merged = [...supabaseAlerts];
+    for (const la of localAlerts) {
+        if (!seenIds.has(la.id)) {
+            merged.push(la);
+        } else {
+            // If both exist, prefer the localStorage version for location (more up-to-date)
+            const sIdx = merged.findIndex((a) => a.id === la.id);
+            if (sIdx !== -1 && la.status === 'resolved' && merged[sIdx].status !== 'resolved') {
+                merged[sIdx] = la;
+            }
+        }
+    }
+
+    // Sort by created_at descending
+    merged.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    return merged.length > 0 ? merged : MOCK_PANIC_ALERTS;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -444,35 +568,82 @@ export interface VaultItem {
     size: string;
     linked: boolean;
     date: string;
+    source: 'complaint' | 'vault' | 'panic';
+    caseId?: string;
+    url?: string;
 }
 
 const MOCK_VAULT: VaultItem[] = [
-    { id: 'v-1', name: 'chat_screenshot_01.png', type: 'image', size: '2.4 MB', linked: true, date: '2026-02-14' },
-    { id: 'v-2', name: 'voice_recording.mp3', type: 'audio', size: '1.1 MB', linked: false, date: '2026-02-12' },
-    { id: 'v-3', name: 'email_evidence.pdf', type: 'document', size: '340 KB', linked: true, date: '2026-02-10' },
-    { id: 'v-4', name: 'cctv_clip.mp4', type: 'video', size: '8.2 MB', linked: false, date: '2026-02-08' },
+    { id: 'v-1', name: 'chat_screenshot_01.png', type: 'image', size: '2.4 MB', linked: true, date: '2026-02-14', source: 'complaint', caseId: 'POSH-2026-001', url: '#' },
+    { id: 'v-2', name: 'voice_recording.mp3', type: 'audio', size: '1.1 MB', linked: true, date: '2026-02-12', source: 'complaint', caseId: 'POSH-2026-001', url: '#' },
+    { id: 'v-3', name: 'email_evidence.pdf', type: 'document', size: '340 KB', linked: true, date: '2026-02-10', source: 'complaint', caseId: 'POSH-2026-002', url: '#' },
+    { id: 'v-4', name: 'cctv_clip.mp4', type: 'video', size: '8.2 MB', linked: false, date: '2026-02-08', source: 'vault', url: '#' },
 ];
 
-/** Get evidence vault items for a user */
+/** Get evidence vault items for a user — merges evidence_vault + complaint_evidence */
 export async function getEvidenceVault(userId: string): Promise<VaultItem[]> {
     if (isSupabaseReady()) {
         try {
-            const { data, error } = await supabase
+            const items: VaultItem[] = [];
+
+            // 1. Fetch from evidence_vault table
+            const { data: vaultData } = await supabase
                 .from('evidence_vault')
                 .select('*')
                 .eq('user_id', userId)
                 .order('created_at', { ascending: false });
-            if (error) throw error;
-            if (data && data.length > 0) {
-                return data.map((d) => ({
-                    id: d.id as string,
-                    name: (d.file_url as string).split('/').pop() || 'file',
-                    type: mapFileType(d.file_type as string),
-                    size: '—',
-                    linked: !!(d.linked_complaint),
-                    date: new Date(d.created_at as string).toISOString().split('T')[0],
-                }));
+            if (vaultData && vaultData.length > 0) {
+                vaultData.forEach((d: any) => {
+                    items.push({
+                        id: d.id,
+                        name: (d.file_url as string).split('/').pop() || 'file',
+                        type: mapFileType(d.file_type as string),
+                        size: '—',
+                        linked: !!(d.linked_complaint),
+                        date: new Date(d.created_at as string).toISOString().split('T')[0],
+                        source: 'vault',
+                        caseId: d.linked_complaint || undefined,
+                        url: d.file_url,
+                    });
+                });
             }
+
+            // 2. Fetch complaint_evidence for complaints filed by this user
+            const { data: complaints } = await supabase
+                .from('complaints')
+                .select('id, case_id')
+                .eq('complainant_id', userId);
+            if (complaints && complaints.length > 0) {
+                const complaintIds = complaints.map((c: any) => c.id as string);
+                const caseIdMap: Record<string, string> = {};
+                complaints.forEach((c: any) => { caseIdMap[c.id] = c.case_id; });
+
+                const { data: evidenceData } = await supabase
+                    .from('complaint_evidence')
+                    .select('*')
+                    .in('complaint_id', complaintIds)
+                    .order('uploaded_at', { ascending: false });
+                if (evidenceData && evidenceData.length > 0) {
+                    evidenceData.forEach((d: any) => {
+                        items.push({
+                            id: d.id,
+                            name: d.file_name || (d.file_url as string).split('/').pop() || 'file',
+                            type: mapFileType(d.file_type as string),
+                            size: '—',
+                            linked: true,
+                            date: new Date(d.uploaded_at as string).toISOString().split('T')[0],
+                            source: 'complaint',
+                            caseId: caseIdMap[d.complaint_id] || d.complaint_id,
+                            url: d.file_url,
+                        });
+                    });
+                }
+            }
+
+            // Always return items if supabase succeeded (even if empty) to avoid fallback
+            items.sort((a, b) => b.date.localeCompare(a.date));
+            return items;
+
         } catch (e) {
             console.warn('[data-service] getEvidenceVault fallback:', e);
         }
@@ -897,4 +1068,54 @@ export async function logAudit(input: {
             console.warn('[data-service] logAudit:', e);
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PANIC EVIDENCE 
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Upload panic recording to Evidence Vault AND attach to the panic alert for HR/security */
+export async function uploadPanicRecording(alertId: string, userId: string, blob: Blob): Promise<boolean> {
+    if (isSupabaseReady()) {
+        try {
+            const fileExt = blob.type.includes('mp4') ? 'mp4' : 'webm';
+            const fileName = `panic_${alertId}_${Date.now()}.${fileExt}`;
+            const filePath = `panic/${userId}/${fileName}`;
+
+            // 1. Upload to Supabase Storage
+            const { error: uploadError } = await supabase.storage
+                .from('evidence')
+                .upload(filePath, blob, { contentType: blob.type || 'video/webm' });
+
+            if (uploadError) {
+                console.error('Panic recording upload failed:', uploadError);
+                return false;
+            }
+
+            const { data: publicData } = supabase.storage
+                .from('evidence')
+                .getPublicUrl(filePath);
+
+            const recordingUrl = publicData.publicUrl || filePath;
+
+            // 2. Save metadata to evidence_vault
+            await supabase.from('evidence_vault').insert({
+                user_id: userId,
+                file_url: recordingUrl,
+                file_type: blob.type || 'video/webm',
+                linked_complaint: `PANIC-${alertId.substring(0, 8)}`,
+            } as Record<string, unknown>);
+
+            // 3. Attach recording URL to the panic_alerts row so HR/security can see it
+            await supabase
+                .from('panic_alerts')
+                .update({ recording_url: recordingUrl } as Record<string, unknown>)
+                .eq('id', alertId);
+
+            return true;
+        } catch (e) {
+            console.error('[data-service] uploadPanicRecording fallback:', e);
+        }
+    }
+    return false;
 }
